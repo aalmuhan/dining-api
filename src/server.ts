@@ -14,7 +14,7 @@ import { openapi } from "@elysiajs/openapi";
 import { initDBConnection } from "db/db";
 import { DateTime } from "luxon";
 import { QueryUtils } from "db/dbQueryUtils";
-import { locationDataTable, locationReportsTable } from "db/schema";
+import { locationDataTable, locationReportsTable, conceptIdToInternalIdTable } from "db/schema";
 import { eq } from "drizzle-orm";
 
 /** only used for Slack debug diff logging */
@@ -104,23 +104,32 @@ app.post(
 app.post(
   "/api/report-location",
   async ({ body: { locationId, message } }) => {
-    // Validate locationId exists in DB
-    const location = await db
+    // Look up the internal ID from the conceptId
+    const conceptMapping = await db
       .select()
-      .from(locationDataTable)
-      .where(eq(locationDataTable.id, String(locationId)))
+      .from(conceptIdToInternalIdTable)
+      .where(eq(conceptIdToInternalIdTable.externalId, String(locationId)))
       .limit(1);
 
-    if (location.length === 0) {
+    if (conceptMapping.length === 0) {
       return { success: false, error: "Invalid location ID" };
     }
 
-    const locationName = location[0].name ?? "Unknown";
+    const internalId = conceptMapping[0].internalId;
+
+    // Get location details
+    const location = await db
+      .select()
+      .from(locationDataTable)
+      .where(eq(locationDataTable.id, internalId))
+      .limit(1);
+
+    const locationName = location.length > 0 ? (location[0].name ?? "Unknown") : "Unknown";
     const timestamp = DateTime.now().setZone("America/New_York").toFormat("yyyy-MM-dd HH:mm:ss");
 
     // Store report in database
     await db.insert(locationReportsTable).values({
-      locationId: String(locationId),
+      locationId: internalId,
       message: message,
       createdAt: timestamp,
     });
